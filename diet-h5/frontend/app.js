@@ -18,9 +18,21 @@ const pet = {
   stare: './assets/pet_parts/inter_stare.png',
   think: './assets/pet_parts/inter_think.png'
 };
-const copies = Array.from({ length: 120 }, (_, i) => `昨天漏记啦，今天补上第${i + 1}条加油提醒`);
+const copies = [
+  '昨天漏记啦，今天继续认真打卡',
+  '昨天休息了一下，今天接着稳稳记录',
+  '没关系，今天开始重新对齐节奏',
+  '小断档很正常，继续就是进步',
+  '今天补上记录，你已经在变好了',
+  '别有压力，先完成今天这一条',
+  '昨天没称重也没事，今天继续',
+  '一步一步来，先把今天完成',
+  '记录不求完美，只求持续',
+  '继续保持，今天也会更轻一点'
+];
 const petTalks = ['二狗陪你打卡', '先吃好再冲刺', '今天也会更轻一点', '喝口水，继续加油', '我在这里看着你'];
-let state = { page: 'today', date: today(), data: window.dietDataManager.data };
+const goalCheers = ['做得好，继续保持', '打卡成功，今天很稳', '又前进了一步', '你比昨天更自律', '很好，状态在线'];
+let state = { page: 'today', date: today(), historyMonth: today().slice(0,7), data: window.dietDataManager.data };
 
 function saveDB() {
   window.dietDataManager.data = state.data;
@@ -43,6 +55,17 @@ function nav() {
   </div>`;
 }
 
+function cnWeekday(dateStr){
+  const n = new Date(dateStr + 'T00:00:00').getDay();
+  return ['周日','周一','周二','周三','周四','周五','周六'][n];
+}
+
+function shiftMonth(ym, step){
+  const d = new Date(`${ym}-01T00:00:00`);
+  d.setMonth(d.getMonth() + step);
+  return d.toISOString().slice(0,7);
+}
+
 window.go = (page, date) => {
   state.page = page;
   if (date) state.date = date;
@@ -50,26 +73,22 @@ window.go = (page, date) => {
 };
 
 function mealCard(type, meal) {
+  const noteText = (meal.note || '').trim();
   return `<div class="card">
     <div class="meal-head">
       <div class="meal-name">${mealEmoji[type]} ${mealLabel[type]}</div>
       <div class="tag">${meal.images.length}/3</div>
     </div>
-    <div class="meal-track">
-      <input type="file" accept="image/*" onchange="uploadImage('${type}', this)">
-      <div class="images">${meal.images.map((src, i) => `<div class="thumb-wrap"><img class="thumb" src="${src}"><button class="btn tiny" onclick="delImage('${type}',${i})">删</button></div>`).join('')}<button class="plus-box" onclick="this.parentElement.parentElement.querySelector('input[type=file]').click()">+</button></div>
-      <textarea class="meal-input" id="note-${type}" placeholder="简单记录这一餐...">${meal.note || ''}</textarea>
+    <div class="meal-track meal-track-simple">
+      <input type="file" accept="image/*" style="display:none" id="file-${type}" onchange="uploadImage('${type}', this)">
+      <button class="plus-box meal-add-btn" onclick="document.getElementById('file-${type}').click()">+</button>
+      <div class="images images-inline">
+        ${meal.images.map((src, i) => `<div class="thumb-wrap"><img class="thumb thumb-small" src="${src}" onclick="openMealEditor('${type}', ${i})"><button class="btn tiny" onclick="delImage('${type}',${i})">删</button></div>`).join('')}
+      </div>
     </div>
-    <div style="margin-top:8px"><button class="btn tiny" onclick="saveMeal('${type}')">保存本餐</button></div>
+    <div class="meal-note-preview">${noteText || '未填写餐食文字（可在图片预览里编辑，最多10字）'}</div>
   </div>`;
 }
-
-window.saveMeal = (type) => {
-  const d = ensureDay(state.date);
-  d.meals[type].note = document.getElementById(`note-${type}`).value;
-  saveDB();
-  render();
-};
 
 window.uploadImage = (type, input) => {
   const file = input.files[0];
@@ -82,16 +101,74 @@ window.uploadImage = (type, input) => {
   const fr = new FileReader();
   fr.onload = () => {
     d.meals[type].images.push(fr.result);
+    const newIdx = d.meals[type].images.length - 1;
     saveDB();
     render();
+    openMealEditor(type, newIdx);
   };
   fr.readAsDataURL(file);
+  input.value = '';
 };
 
 window.delImage = (type, idx) => {
   const d = ensureDay(state.date);
   d.meals[type].images.splice(idx, 1);
   saveDB();
+  render();
+};
+
+window.openMealEditor = (type, idx = 0) => {
+  const d = ensureDay(state.date);
+  const meal = d.meals[type];
+  if (!meal.images.length) return;
+  const safeIdx = Math.max(0, Math.min(idx, meal.images.length - 1));
+  const src = meal.images[safeIdx];
+  const currentNote = meal.note || '';
+  const old = document.getElementById('mealEditorMask');
+  if (old) old.remove();
+  const mask = document.createElement('div');
+  mask.id = 'mealEditorMask';
+  mask.className = 'meal-modal-mask';
+  mask.innerHTML = `<div class="meal-modal">
+      <div class="meal-modal-head">
+        <b>${mealEmoji[type]} ${mealLabel[type]} · 图片预览</b>
+        <button class="btn tiny" onclick="closeMealEditor()">关闭</button>
+      </div>
+      <img class="meal-modal-img" src="${src}" alt="meal-preview">
+      <div class="meal-modal-tip">文字备注（最多10字）</div>
+      <input id="mealEditorInput" class="meal-modal-input" maxlength="10" value="${currentNote.replace(/"/g, '&quot;')}" placeholder="例如：鸡胸+蔬菜">
+      <div class="meal-modal-footer">
+        <span class="hint"><span id="mealEditorCount">${Math.min(10, currentNote.length)}</span>/10</span>
+        <button class="btn primary tiny" onclick="saveMealNote('${type}')">保存文字</button>
+      </div>
+    </div>`;
+  mask.addEventListener('click', (e) => {
+    if (e.target === mask) closeMealEditor();
+  });
+  document.body.appendChild(mask);
+  const input = document.getElementById('mealEditorInput');
+  const cnt = document.getElementById('mealEditorCount');
+  if (input && cnt) {
+    input.addEventListener('input', () => {
+      input.value = input.value.slice(0, 10);
+      cnt.textContent = String(input.value.length);
+    });
+    input.focus();
+  }
+};
+
+window.closeMealEditor = () => {
+  const mask = document.getElementById('mealEditorMask');
+  if (mask) mask.remove();
+};
+
+window.saveMealNote = (type) => {
+  const input = document.getElementById('mealEditorInput');
+  if (!input) return;
+  const d = ensureDay(state.date);
+  d.meals[type].note = String(input.value || '').slice(0, 10);
+  saveDB();
+  closeMealEditor();
   render();
 };
 
@@ -102,9 +179,31 @@ window.setGoal = (k, v) => {
   render();
 };
 
-window.saveDaily = () => {
+window.toggleGoal = (k) => {
   const d = ensureDay(state.date);
-  d.note = document.getElementById('dailyNote').value;
+  d.goals[k] = !d.goals[k];
+  if (d.goals[k]) showGoalCheer();
+  saveDB();
+  render();
+};
+
+function showGoalCheer() {
+  const msg = goalCheers[Math.floor(Math.random() * goalCheers.length)];
+  const old = document.getElementById('goalCheerToast');
+  if (old) old.remove();
+  const el = document.createElement('div');
+  el.id = 'goalCheerToast';
+  el.className = 'goal-cheer-toast';
+  el.textContent = `✨ ${msg}`;
+  document.body.appendChild(el);
+  setTimeout(() => el.classList.add('show'), 20);
+  setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => el.remove(), 220);
+  }, 1300);
+}
+
+window.saveDaily = () => {
   saveDB();
   render();
 };
@@ -122,6 +221,7 @@ function renderToday() {
   const d = ensureDay(state.date);
   const de = delta(state.date);
   const doneCount = [d.goals.diet, d.goals.exercise, d.goals.sleep].filter(Boolean).length;
+  const lastW = d.weights.length ? `${d.weights[d.weights.length - 1].weight} kg` : '--';
   const reminder = de == null ? copies[Math.floor(Math.random() * copies.length)] : '保持这个节奏，今天也很棒';
   const petMood = doneCount === 3 ? { img: pet.satisfied, text: '三项全达标，今天超棒。' }
     : doneCount >= 1 ? { img: pet.happy, text: '已经完成一部分，继续冲刺。' }
@@ -148,29 +248,35 @@ function renderToday() {
       ];
 
   app.innerHTML = `<div class="phone-shell page-shell">${nav()}
-  <div class="hero">
-    <div>
+  <div class="hero hero-banner card">
+    <div class="hero-left-line"></div>
+    <div class="hero-main">
       <h1 class="h1">今日记录</h1>
       <div class="muted">${state.date} · Day ${dayIndex(state.date)}</div>
-      <div class="hint" style="margin-top:8px">一起加油呀！ ${reminder}</div>
+      <div class="hint hero-hint">一起加油呀！ ${reminder}</div>
     </div>
     <img class="pet-avatar" src="${pet.happy}" alt="pet-happy">
   </div>
+  <div class="today-overview card">
+    <div class="today-actions-col">
+      <div class="overview-title">行为打卡</div>
+      <div class="goal-grid">
+      ${goalToggle('控制饮食', 'diet', d.goals.diet)}
+      ${goalToggle('规律锻炼', 'exercise', d.goals.exercise)}
+      ${goalToggle('规律作息', 'sleep', d.goals.sleep)}
+      </div>
+    </div>
+    <div class="today-weight" onclick="openWeightEditor()">
+      <div class="overview-title">体重</div>
+      <div class="weight-inline">
+        <div class="weight-inline-box">${lastW === '--' ? 'xx' : lastW.replace(' kg','')}</div>
+        <div class="weight-inline-unit">kg</div>
+      </div>
+    </div>
+  </div>
   <div class="card">
     <div class="module-title">三餐记录</div>
-    <div class="scroll-box">${meals.map((m) => mealCard(m, d.meals[m])).join('')}</div>
-  </div>
-  <div class="card action-card">
-    <div class="section-title">今日行为打卡 <span class="tag">3项</span></div>
-    ${goalRow('控制饮食', 'diet', d.goals.diet)}
-    ${goalRow('规律锻炼', 'exercise', d.goals.exercise)}
-    ${goalRow('规律作息', 'sleep', d.goals.sleep)}
-    <textarea id="dailyNote" placeholder="今日总结...">${d.note || ''}</textarea>
-  </div>
-  <div class="card weight-card">
-    <div class="section-title">体重记录 <span class="muted">当天最后一次参与掉秤计算</span></div>
-    <div class="row"><input id="weightInput" type="number" step="0.1" placeholder="例如 59.8"><button class="btn" onclick="addWeight()">添加</button></div>
-    ${(d.weights || []).map((w) => `<div class="weight-item"><span>${new Date(w.at).toLocaleTimeString()}</span><b>${w.weight} kg</b></div>`).join('')}
+    <div>${meals.map((m) => mealCard(m, d.meals[m])).join('')}</div>
   </div>
   <div class="dual-actions">
     <button class="btn primary big" onclick="saveDaily()">保存今日记录</button>
@@ -203,18 +309,69 @@ function renderSummary() {
   </div>
   <div class="card">
     <div class="section-title">体重记录（最近）</div>
+    <canvas id="weightChart" width="960" height="260" style="width:100%;height:140px;margin-bottom:8px"></canvas>
     ${weightRows.length ? weightRows.map((w) => `<div class="weight-item"><span>${new Date(w.at).toLocaleTimeString()}</span><b>${w.weight} kg</b></div>`).join('') : '<div class="muted">暂无体重记录</div>'}
   </div>
   <div class="dual-actions">
     <button class="btn secondary big" onclick="go('today')">返回编辑</button>
-    <button class="btn primary big" onclick="downloadSummary()">下载图片</button>
+    <button class="btn primary big" onclick="saveToAlbum()">保存到相册</button>
   </div>
   </div>`;
+  renderWeightChart(d.weights || []);
 }
 
 function goalRow(name, key, val) {
   return `<div class="goal-row"><span>${name}</span><div class="goal-actions"><button class="pill ${val ? 'active' : ''}" onclick="setGoal('${key}', true)">是</button><button class="pill ${val ? '' : 'active'}" onclick="setGoal('${key}', false)">否</button></div></div>`;
 }
+
+function goalToggle(name, key, val) {
+  return `<button class="goal-toggle ${val ? 'on' : 'off'}" onclick="toggleGoal('${key}')">${name}</button>`;
+}
+
+window.openWeightEditor = () => {
+  const d = ensureDay(state.date);
+  const old = document.getElementById('weightEditorMask');
+  if (old) old.remove();
+  const rows = (d.weights || []).map((w, i) => `<div class="weight-item"><span>${new Date(w.at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span><b>${w.weight} kg</b><button class="btn tiny" onclick="delWeight(${i})">删</button></div>`).join('');
+  const mask = document.createElement('div');
+  mask.id = 'weightEditorMask';
+  mask.className = 'meal-modal-mask';
+  mask.innerHTML = `<div class="meal-modal">
+    <div class="meal-modal-head">
+      <b>今日体重更新</b>
+      <button class="btn tiny" onclick="closeWeightEditor()">关闭</button>
+    </div>
+    <div class="row"><input id="weightInputModal" type="number" step="0.1" placeholder="例如 59.8"><button class="btn primary tiny" onclick="addWeightFromModal()">添加</button></div>
+    <div style="margin-top:10px">${rows || '<div class="muted">暂无体重记录</div>'}</div>
+  </div>`;
+  mask.addEventListener('click', (e) => { if (e.target === mask) closeWeightEditor(); });
+  document.body.appendChild(mask);
+};
+
+window.closeWeightEditor = () => {
+  const mask = document.getElementById('weightEditorMask');
+  if (mask) mask.remove();
+};
+
+window.addWeightFromModal = () => {
+  const el = document.getElementById('weightInputModal');
+  if (!el) return;
+  const v = Number(el.value);
+  if (!v) return;
+  const d = ensureDay(state.date);
+  d.weights.push({ weight: v, at: new Date().toISOString() });
+  saveDB();
+  openWeightEditor();
+  render();
+};
+
+window.delWeight = (idx) => {
+  const d = ensureDay(state.date);
+  d.weights.splice(idx, 1);
+  saveDB();
+  openWeightEditor();
+  render();
+};
 
 function drawRoundedImage(ctx, img, x, y, w, h, r = 18) {
   ctx.save();
@@ -307,8 +464,18 @@ window.generateSummary = async () => {
 };
 
 function renderHistory() {
-  const rows = Object.values(state.data.days).sort((a, b) => b.date.localeCompare(a.date));
-  app.innerHTML = `<div class="phone-shell page-shell">${nav()}<div class="card hero"><div><h1 class="h1">历史记录</h1><div class="muted">最近 12 天</div></div><img class="pet-avatar" src="${pet.curious}" alt="pet-curious"></div>
+  const month = state.historyMonth;
+  const rows = Object.values(state.data.days)
+    .filter((d) => d.date.slice(0,7) === month)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  app.innerHTML = `<div class="phone-shell page-shell">${nav()}<div class="card hero"><div><h1 class="h1">历史记录</h1><div class="muted">${month.replace('-', '年')}月</div></div><img class="pet-avatar" src="${pet.curious}" alt="pet-curious"></div>
+  <div class="card">
+    <div class="section-title">
+      <button class="btn tiny" onclick="state.historyMonth=shiftMonth(state.historyMonth,-1);renderHistory()">‹ 上月</button>
+      <span>${month.replace('-', '年')}月</span>
+      <button class="btn tiny" onclick="state.historyMonth=shiftMonth(state.historyMonth,1);renderHistory()">下月 ›</button>
+    </div>
+  </div>
   <div class="card">
     <div class="section-title">本地备份</div>
     <div class="dual-actions">
@@ -320,8 +487,14 @@ function renderHistory() {
   </div>
   <div class="card">
     <div class="scroll-box">
-    ${rows.length ? rows.slice(0,12).map((r) => `<div class="list-item"><div><b>${r.date}</b><div class="muted">图片 ${r.meals.breakfast.images.length + r.meals.lunch.images.length + r.meals.dinner.images.length} 张 · 体重 ${r.weights.length ? r.weights[r.weights.length - 1].weight : '--'} kg</div></div><button class="btn tiny" onclick="go('today','${r.date}')">查看</button></div>`).join('') : '<div class="muted">暂无数据</div>'}
+    ${rows.length ? rows.map((r) => {
+      const imgCount = r.meals.breakfast.images.length + r.meals.lunch.images.length + r.meals.dinner.images.length;
+      const done = [r.goals.diet, r.goals.exercise, r.goals.sleep].filter(Boolean).length;
+      const w = r.weights.length ? `${r.weights[r.weights.length - 1].weight} kg` : '--';
+      return `<div class="list-item"><div><b>${r.date.slice(8)} <span class="muted">${cnWeekday(r.date)}</span></b><div class="muted">🍽 ${imgCount?imgCount+'张':'无图'} · ✅ ${done}/3 · ⚖ ${w}</div></div><button class="btn tiny" onclick="go('today','${r.date}')">查看</button></div>`;
+    }).join('') : '<div class="muted">暂无数据</div>'}
     </div>
+    <div class="hint" style="margin-top:8px">图例：🍽 三餐图片 | ✅ 打卡达成数 | ⚖ 最终体重</div>
   </div></div>`;
 }
 
@@ -333,6 +506,54 @@ window.downloadSummary = () => {
   a.download = `summary_${state.date}.png`;
   a.click();
 };
+
+window.saveToAlbum = async () => {
+  const d = ensureDay(state.date);
+  if (!d.summary) return alert('请先生成汇总图');
+  try {
+    const res = await fetch(d.summary);
+    const blob = await res.blob();
+    const file = new File([blob], `summary_${state.date}.png`, { type: 'image/png' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: '今日汇总图' });
+      return;
+    }
+  } catch {}
+  downloadSummary();
+};
+
+function renderWeightChart(weights){
+  const canvas = document.getElementById('weightChart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  const rows = (weights || []).slice(-6);
+  if (!rows.length) return;
+  const vals = rows.map((w) => Number(w.weight));
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const pad = 26;
+  const w = canvas.width, h = canvas.height;
+  const toX = (i) => pad + (i * (w - pad*2) / Math.max(1, rows.length-1));
+  const toY = (v) => {
+    if (max === min) return h/2;
+    return h - pad - ((v - min) * (h - pad*2) / (max - min));
+  };
+  ctx.strokeStyle = '#ecd9c4';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(pad,h-pad); ctx.lineTo(w-pad,h-pad); ctx.stroke();
+  ctx.strokeStyle = '#d39a5f';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  rows.forEach((r,i)=>{ const x=toX(i), y=toY(Number(r.weight)); if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); });
+  ctx.stroke();
+  rows.forEach((r,i)=>{
+    const x=toX(i), y=toY(Number(r.weight));
+    ctx.fillStyle='#d39a5f'; ctx.beginPath(); ctx.arc(x,y,5,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#6f5a4a'; ctx.font='20px sans-serif'; ctx.fillText(String(r.weight), x-14, y-10);
+    const t = new Date(r.at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+    ctx.fillStyle='#9a8575'; ctx.font='16px sans-serif'; ctx.fillText(t, x-20, h-6);
+  });
+}
 
 window.backupJson = () => {
   try {
@@ -482,7 +703,7 @@ try {
   mountDesktopPet();
   const tag = document.createElement('div');
   tag.className = 'build-tag';
-  tag.innerHTML = 'build 2026-05-26.5 · 本地 · <a href="./admin.html" style="color:#9a6e47;text-decoration:none;font-weight:700">后台</a>';
+  tag.innerHTML = 'build 2026-05-26.6 · 本地 · <a href="./admin.html" style="color:#9a6e47;text-decoration:none;font-weight:700">后台</a>';
   document.body.appendChild(tag);
 } catch (err) {
   document.body.innerHTML = `<pre style="padding:16px;white-space:pre-wrap;font-family:monospace">页面初始化失败:\n${err?.message || err}</pre>`;
